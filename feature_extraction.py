@@ -78,6 +78,9 @@ def extract_features(voltage, current, do_baseline=True, do_smooth=True):
     feats = {}
 
     voltage, current = ensure_monotonic_voltage(voltage, current)
+    # Debug: log voltage and current info
+    print(f"[DEBUG] voltage length={len(voltage)}, min={np.min(voltage)}, max={np.max(voltage)}")
+    print(f"[DEBUG] current length={len(current)}, min={np.min(current)}, max={np.max(current)}")
     cur_raw = current.copy()
 
     if do_baseline:
@@ -122,10 +125,15 @@ def extract_features(voltage, current, do_baseline=True, do_smooth=True):
         feats["Slope_min_post"] = np.nan
 
     # Derivatives
-    dI_dV_full = np.gradient(current, voltage)
-    feats["Slope_max"] = float(np.max(dI_dV_full))
-    feats["Slope_min"] = float(np.min(dI_dV_full))
-    feats["Mean_abs_slope"] = float(np.mean(np.abs(dI_dV_full)))
+    try:
+        dI_dV_full = np.gradient(current, voltage)
+        dI_dV_full = np.nan_to_num(dI_dV_full, nan=0.0, posinf=0.0, neginf=0.0)
+        feats["Slope_max"] = float(np.nanmax(dI_dV_full))
+        feats["Slope_min"] = float(np.nanmin(dI_dV_full))
+        feats["Mean_abs_slope"] = float(np.mean(np.abs(dI_dV_full)))
+    except Exception as e:
+        print(f"[WARNING] slope calculation failed: {e}")
+        feats["Slope_max"] = feats["Slope_min"] = feats["Mean_abs_slope"] = np.nan
 
     # Area under curve
     feats["AUC_total"] = float(simpson(current, voltage))
@@ -138,17 +146,23 @@ def extract_features(voltage, current, do_baseline=True, do_smooth=True):
 
     # FFT features
     dv = float(np.median(np.diff(voltage))) if len(voltage) > 1 else 1.0
-    yf = np.abs(fft(current))
-    xf = fftfreq(len(current), dv)
-
-    if len(yf) > 1:
-        idx = 1 + np.argmax(yf[1:])
-        feats["FFT_peak_freq"] = float(xf[idx])
-    else:
-        feats["FFT_peak_freq"] = np.nan
-
-    feats["FFT_power_total"] = float(np.sum(yf ** 2))
-    feats["FFT_power_low"] = float(np.sum(yf[np.abs(xf) < 0.1] ** 2))
-    feats["FFT_power_high"] = float(np.sum(yf[np.abs(xf) >= 0.1] ** 2))
+    if dv == 0:
+        print("[WARNING] dv (voltage step) is zero. Replacing with 1e-6 to avoid division by zero in FFT")
+    dv = 1e-6
+    # FFT features
+    try:
+        yf = np.abs(fft(current))
+        xf = fftfreq(len(current), dv)
+        if len(yf) > 1:
+            idx = 1 + np.argmax(yf[1:])
+            feats["FFT_peak_freq"] = float(xf[idx])
+        else:
+            feats["FFT_peak_freq"] = np.nan
+        feats["FFT_power_total"] = float(np.sum(yf ** 2))
+        feats["FFT_power_low"] = float(np.sum(yf[np.abs(xf) < 0.1] ** 2))
+        feats["FFT_power_high"] = float(np.sum(yf[np.abs(xf) >= 0.1] ** 2))
+    except Exception as e:
+        print(f"[WARNING] FFT calculation failed: {e}")
+        feats["FFT_peak_freq"] = feats["FFT_power_total"] = feats["FFT_power_low"] = feats["FFT_power_high"] = np.nan
 
     return feats
